@@ -13,6 +13,10 @@ namespace QueryLog
     public class Logger
     {
         private readonly int hashcode;
+        private FileStream tempFile;
+        private StreamWriter tempFileWriter;
+
+        private object locker = new object();
 
         private SqliteConnection sqlite;
 
@@ -90,6 +94,21 @@ namespace QueryLog
             cmd.Parameters.Add(new SqliteParameter("@connectionString", SqliteType.Text) { Value = connectionString });
             cmd.Parameters.Add(new SqliteParameter("@query", SqliteType.Text) { Value = query });
             currentPK = (long)cmd.ExecuteScalar();
+            /*
+            var sb = new StringBuilder();
+            var time = DateTimeOffset.Now.ToString();
+            sb.AppendLine($"{time} {server} {db}");
+            sb.AppendLine(query.Trim());
+            sb.AppendLine();
+
+            lock (locker)
+            {
+                tempFile = File.Open($"currently-executing-{hashcode}.txt", FileMode.Create, FileAccess.ReadWrite, FileShare.Read);
+                tempFileWriter = new StreamWriter(tempFile, new UTF8Encoding(false), 1024, true);
+
+                tempFileWriter.Write(sb.ToString());
+            }
+            */
         }
 
         public void OnEnd(ScriptExecutionResult result)
@@ -108,6 +127,23 @@ namespace QueryLog
             cmd.Parameters.Add(new SqliteParameter("@status", SqliteType.Integer) { Value = (int)result });
             cmd.Parameters.Add(new SqliteParameter("@duration", SqliteType.Real) { Value = timer.Elapsed.TotalSeconds });
             cmd.ExecuteNonQuery();
+            /*
+            var sb = new StringBuilder();
+            var time = DateTimeOffset.Now.ToString();
+            sb.AppendLine($"{time} result: {result}");
+
+            lock (locker)
+            {
+                tempFileWriter.Write(sb.ToString());
+                tempFileWriter.Dispose();
+                tempFileWriter = null;
+
+                tempFile.Position = 0;
+                AppendFileToGlobal();
+                tempFile.Dispose();
+                tempFile = null;
+            }
+            */
         }
 
         public void OnMessage(string message, string detailedMessage)
@@ -121,6 +157,16 @@ namespace QueryLog
             cmd.Parameters.Add(new SqliteParameter("@message", SqliteType.Text) { Value = message.Trim() });
             cmd.Parameters.Add(new SqliteParameter("@detailedMessage", SqliteType.Text) { Value = detailedMessage.Trim() });
             cmd.ExecuteNonQuery();
+            /*
+            var sb = new StringBuilder();
+            var time = DateTimeOffset.Now.ToString();
+            sb.AppendLine($"{time} {message} {detailedMessage}");
+
+            lock (locker)
+            {
+                tempFileWriter.Write(sb.ToString());
+            }
+            */
         }
 
         public void OnErrorMessage(string detailedMessage, string descriptionMessage, int line)
@@ -135,6 +181,29 @@ namespace QueryLog
             cmd.Parameters.Add(new SqliteParameter("@descriptionMessage", SqliteType.Text) { Value = descriptionMessage.Trim() });
             cmd.Parameters.Add(new SqliteParameter("@line", SqliteType.Integer) { Value = line });
             cmd.ExecuteNonQuery();
+            /*
+            var sb = new StringBuilder();
+            var time = DateTimeOffset.Now.ToString();
+            sb.AppendLine($"{time} {detailedMessage} {descriptionMessage} {line}");
+
+            lock (locker)
+            {
+                tempFileWriter.Write(sb.ToString());
+            }
+            */
+        }
+
+        private void AppendFileToGlobal()
+        {
+            var mutex = new Mutex(false, "ssms-querylogger");
+            mutex.WaitOne();
+
+            using (var globalfile = File.Open("ssms-querylog.txt", FileMode.Append, FileAccess.Write, FileShare.Read))
+            {
+                tempFile.CopyTo(globalfile);
+            }
+
+            mutex.ReleaseMutex();
         }
     }
 }
